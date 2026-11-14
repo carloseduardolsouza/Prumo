@@ -1,0 +1,24 @@
+meta {
+  name: Login
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrlCore}}/api/v1/auth/login
+  body: json
+  auth: none
+}
+
+body:json {
+  { "email": "carlos@prumo.test", "password": "senha-segura-123", "deviceName": "Bruno" }
+}
+
+script:post-response {
+  bru.setEnvVar("token", res.body.accessToken);
+  bru.setEnvVar("refreshToken", res.body.refreshToken);
+}
+
+assert {
+  res.status: eq 200
+}

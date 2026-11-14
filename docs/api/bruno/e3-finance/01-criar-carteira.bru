@@ -1,0 +1,27 @@
+meta {
+  name: Criar carteira
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrlCore}}/api/v1/wallets
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  { "name": "Itaú", "type": "CHECKING", "institution": "Itaú", "openingBalance": "1000.00" }
+}
+
+script:post-response {
+  bru.setEnvVar("walletId", res.body.wallet.id);
+}
+
+assert {
+  res.status: eq 201
+}

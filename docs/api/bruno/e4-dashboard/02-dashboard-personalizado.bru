@@ -1,0 +1,19 @@
+meta {
+  name: Dashboard (personalizado)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrlCore}}/api/v1/dashboard?period=custom&from=2026-10-01&to=2026-11-30
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+assert {
+  res.status: eq 200
+}

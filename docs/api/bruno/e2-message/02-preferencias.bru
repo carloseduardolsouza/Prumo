@@ -1,0 +1,23 @@
+meta {
+  name: Preferências de notificação
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrlMessage}}/message/v1/preferences
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  { "leadDays": 5, "quietEnabled": true, "quietStart": 22, "quietEnd": 7, "pushEnabled": true }
+}
+
+assert {
+  res.status: eq 200
+}

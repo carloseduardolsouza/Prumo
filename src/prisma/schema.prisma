@@ -1,0 +1,970 @@
+// Prumo — schema único compartilhado por core e message (cada entrega acrescenta seus models por migration).
+// Valores monetários: Decimal(19,4). Todo registro de negócio pertence a um usuário (userId).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  PENDING_EMAIL
+  ACTIVE
+  DELETION_REQUESTED
+  DELETED
+}
+
+model User {
+  id                  String     @id @default(uuid())
+  email               String     @unique
+  name                String
+  passwordHash        String
+  status              UserStatus @default(PENDING_EMAIL)
+  emailVerifiedAt     DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  deletedAt           DateTime?
+  deletionRequestedAt DateTime?
+
+  preferences      UserPreference?
+  sessions         Session[]
+  emailTokens      EmailToken[]
+  notifications    Notification[]
+  deviceTokens     DeviceToken[]
+  notificationPref NotificationPreference?
+  categories       Category[]
+  wallets          Wallet[]
+  ledgerEntries    LedgerEntry[]
+  transactions     FinancialTransaction[]
+  transfers        Transfer[]
+  auditLogs        AuditLog[]
+  idempotencyKeys  IdempotencyKey[]
+  creditCards      CreditCard[]
+  recurringRules   RecurringRule[]
+  splits           Split[]
+  financings       Financing[]
+  consortiums      Consortium[]
+
+  @@map("users")
+}
+
+// Trilha de auditoria de alterações financeiras (RN007). Nunca grava senhas, tokens ou dados de cartão.
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String // ex.: "wallet.create", "transaction.settle"
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+// Idempotência de operações sujeitas a repetição (RN011): mesma chave + mesmo usuário devolve a resposta salva.
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  userId       String
+  key          String
+  method       String
+  path         String
+  requestHash  String
+  responseCode Int?
+  responseBody Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+enum ThemeMode {
+  ESCURO
+  CLARO
+  AUTO
+}
+
+model UserPreference {
+  userId           String    @id
+  currency         String    @default("BRL")
+  dateFormat       String    @default("dd/mm/aaaa")
+  timezone         String    @default("America/Sao_Paulo")
+  firstDayOfWeek   Int       @default(0) // 0 = domingo, 1 = segunda
+  theme            ThemeMode @default(ESCURO)
+  hideValuesOnOpen Boolean   @default(false)
+  hideInBackground Boolean   @default(true)
+  biometricLock    Boolean   @default(false)
+  balanceWidget    Boolean   @default(false)
+  analyticsOptIn   Boolean   @default(false)
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// Uma sessão por dispositivo. O refresh token é opaco ("<sessionId>.<segredo>") e só o hash fica no banco.
+// prevRefreshHash detecta reuso de um refresh já rotacionado (possível roubo) e derruba a sessão.
+model Session {
+  id              String    @id @default(uuid())
+  userId          String
+  refreshHash     String
+  prevRefreshHash String?
+  deviceName      String?
+  userAgent       String?
+  ip              String?
+  createdAt       DateTime  @default(now())
+  lastUsedAt      DateTime  @default(now())
+  expiresAt       DateTime
+  revokedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("sessions")
+}
+
+enum EmailTokenKind {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
+model EmailToken {
+  id        String         @id @default(uuid())
+  userId    String
+  kind      EmailTokenKind
+  tokenHash String         @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+  @@map("email_tokens")
+}
+
+// ── Serviço message ─────────────────────────────────────────────────────────────
+enum NotificationCategory {
+  VENC // vencimentos, faturas, parcelas, saldo projetado
+  ORC // orçamento, limite de cartão, assinaturas
+  META
+  INV // investimentos
+}
+
+model Notification {
+  id        String               @id @default(uuid())
+  userId    String
+  type      String // EventType
+  category  NotificationCategory
+  title     String
+  body      String
+  href      String? // rota do app ao tocar
+  data      Json?
+  dedupeKey String
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  userId       String   @id
+  venc         Boolean  @default(true)
+  orc          Boolean  @default(true)
+  meta         Boolean  @default(true)
+  inv          Boolean  @default(true)
+  leadDays     Int      @default(3)
+  quietEnabled Boolean  @default(true)
+  quietStart   Int      @default(22) // hora local (0-23)
+  quietEnd     Int      @default(7)
+  pushEnabled  Boolean  @default(true)
+  emailEnabled Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+model DeviceToken {
+  id         String   @id @default(uuid())
+  userId     String
+  token      String   @unique
+  platform   String
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_tokens")
+}
+
+model MessageLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  channel   String // email | push | in_app
+  type      String
+  status    String // sent | skipped | failed
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("message_logs")
+}
+
+// ── E3: núcleo financeiro ───────────────────────────────────────────────────────
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+model Category {
+  id         String       @id @default(uuid())
+  userId     String
+  name       String
+  type       CategoryType
+  icon       String?
+  color      String?
+  parentId   String?
+  archivedAt DateTime?
+  createdAt  DateTime     @default(now())
+
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent       Category?              @relation("CategoryTree", fields: [parentId], references: [id])
+  children     Category[]             @relation("CategoryTree")
+  transactions FinancialTransaction[]
+
+  @@index([userId, type])
+  @@map("categories")
+}
+
+enum WalletType {
+  CHECKING
+  SAVINGS
+  DIGITAL_BANK
+  BANK
+  PAYMENT
+  DIGITAL_WALLET
+  CASH
+  INTERNATIONAL
+  OTHER
+}
+
+model Wallet {
+  id            String     @id @default(uuid())
+  userId        String
+  name          String
+  type          WalletType
+  institution   String?
+  currency      String     @default("BRL")
+  color         String?
+  icon          String?
+  notes         String?
+  openingDate   DateTime   @db.Date
+  // Cache do saldo, mantido na mesma transação de cada lançamento do ledger e reconciliável (RN013).
+  cachedBalance Decimal    @default(0) @db.Decimal(19, 4)
+  archivedAt    DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries LedgerEntry[]
+
+  @@index([userId, archivedAt])
+  @@map("wallets")
+}
+
+enum LedgerKind {
+  OPENING // saldo de abertura: não é receita (RN: saldo inicial)
+  INCOME
+  EXPENSE
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+  SPLIT_ADVANCE // parte dos outros paga por mim numa divisão (a receber)
+  REIMBURSEMENT // reembolso recebido de uma divisão
+  CARD_PAYMENT // pagamento de fatura (saída da carteira; a despesa já foi reconhecida na compra)
+  REVERSAL // estorno de outro lançamento
+}
+
+// Livro-razão imutável: nunca é editado nem apagado; correções são estornos (RN007/RN008).
+model LedgerEntry {
+  id              String     @id @default(uuid())
+  userId          String
+  walletId        String
+  amount          Decimal    @db.Decimal(19, 4) // + entra, - sai
+  kind            LedgerKind
+  effectiveDate   DateTime   @db.Date
+  description     String?
+  transactionId   String?
+  transferId      String?
+  reversesEntryId String?    @unique
+  investmentOpId   String?
+  createdAt       DateTime   @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, effectiveDate])
+  @@index([userId, effectiveDate])
+  @@index([transactionId])
+  @@index([investmentOpId])
+  @@index([transferId])
+  @@map("ledger_entries")
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+enum TxStatus {
+  PLANNED
+  PARTIAL
+  SETTLED
+  CANCELED
+}
+
+model FinancialTransaction {
+  id               String    @id @default(uuid())
+  userId           String
+  type             TxType
+  status           TxStatus  @default(PLANNED)
+  description      String
+  categoryId       String?
+  walletId         String?
+  plannedAmount    Decimal   @db.Decimal(19, 4)
+  paidAmount       Decimal   @default(0) @db.Decimal(19, 4)
+  competenceDate   DateTime  @db.Date
+  dueDate          DateTime? @db.Date
+  paidDate         DateTime? @db.Date
+  notes            String?
+  externalHash     String? // dedupe de importação CSV/OFX
+  canceledAt       DateTime?
+  recurrenceRuleId String?
+  occurrenceDate   DateTime? @db.Date
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id])
+
+  @@unique([recurrenceRuleId, occurrenceDate]) // nunca gera a mesma ocorrência duas vezes (RN025)
+  @@unique([userId, externalHash])
+  @@index([userId, status])
+  @@index([userId, paidDate])
+  @@index([userId, dueDate])
+  @@map("financial_transactions")
+}
+
+model Transfer {
+  id           String    @id @default(uuid())
+  userId       String
+  fromWalletId String
+  toWalletId   String
+  amount       Decimal   @db.Decimal(19, 4)
+  date         DateTime  @db.Date
+  notes        String?
+  feeTxId      String? // despesa da taxa, registrada à parte (RN017)
+  canceledAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@map("transfers")
+}
+
+// ── E5: cartões e faturas ───────────────────────────────────────────────────────
+enum CardStatus {
+  ACTIVE
+  BLOCKED
+  CANCELED
+  ARCHIVED
+}
+
+enum LimitPolicy {
+  CONSERVATIVE // compromete todas as parcelas ainda não pagas (padrão, RN033)
+  INVOICE_ONLY // compromete só o saldo das faturas abertas/fechadas
+}
+
+// Nunca guarda número completo, CVV ou senha (spec §6.2).
+model CreditCard {
+  id          String      @id @default(uuid())
+  userId      String
+  name        String
+  issuer      String?
+  brand       String?
+  holder      String?
+  last4       String?
+  limit       Decimal     @db.Decimal(19, 4)
+  closingDay  Int
+  dueDay      Int
+  color       String?
+  limitPolicy LimitPolicy @default(CONSERVATIVE)
+  status      CardStatus  @default(ACTIVE)
+  notes       String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+  purchases   CardPurchase[]
+  adjustments CardLimitAdjustment[]
+
+  @@index([userId, status])
+  @@map("credit_cards")
+}
+
+model Invoice {
+  id          String   @id @default(uuid())
+  userId      String
+  cardId      String
+  refYear     Int // ano/mês do VENCIMENTO
+  refMonth    Int
+  startDate   DateTime @db.Date
+  closingDate DateTime @db.Date
+  dueDate     DateTime @db.Date
+  createdAt   DateTime @default(now())
+
+  card         CreditCard            @relation(fields: [cardId], references: [id])
+  installments PurchaseInstallment[]
+  payments     InvoicePayment[]
+
+  @@unique([cardId, refYear, refMonth])
+  @@index([userId, dueDate])
+  @@map("invoices")
+}
+
+model CardPurchase {
+  id            String    @id @default(uuid())
+  userId        String
+  cardId        String
+  description   String
+  establishment String?
+  categoryId    String?
+  purchaseDate  DateTime  @db.Date
+  totalAmount   Decimal   @db.Decimal(19, 4) // negativo em estornos
+  installments  Int       @default(1)
+  refundOfId    String? // compra original, quando este registro é um estorno
+  reason        String?
+  notes         String?
+  canceledAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  card  CreditCard            @relation(fields: [cardId], references: [id])
+  items PurchaseInstallment[]
+
+  @@index([userId, purchaseDate])
+  @@index([cardId])
+  @@map("card_purchases")
+}
+
+model PurchaseInstallment {
+  id             String   @id @default(uuid())
+  userId         String
+  purchaseId     String
+  invoiceId      String
+  number         Int
+  total          Int
+  amount         Decimal  @db.Decimal(19, 4)
+  competenceDate DateTime @db.Date // quando a despesa é reconhecida (RN012): data da compra + (n-1) meses
+  categoryId     String?
+
+  purchase CardPurchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  invoice  Invoice      @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+  @@index([userId, competenceDate])
+  @@map("purchase_installments")
+}
+
+model InvoicePayment {
+  id            String    @id @default(uuid())
+  userId        String
+  invoiceId     String
+  walletId      String
+  amount        Decimal   @db.Decimal(19, 4)
+  feeTxId       String? // juros/multa/encargos pagos junto, como despesa à parte (RN038)
+  ledgerEntryId String? // saída na carteira, para estornar ao cancelar o pagamento
+  paidDate      DateTime  @db.Date
+  canceledAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_payments")
+}
+
+model CardLimitAdjustment {
+  id        String   @id @default(uuid())
+  userId    String
+  cardId    String
+  previous  Decimal  @db.Decimal(19, 4)
+  next      Decimal  @db.Decimal(19, 4)
+  reason    String
+  createdAt DateTime @default(now())
+
+  card CreditCard @relation(fields: [cardId], references: [id])
+
+  @@map("card_limit_adjustments")
+}
+
+// ── E6: recorrências, divisões ──────────────────────────────────────────────────
+enum Frequency {
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  CUSTOM
+}
+
+model RecurringRule {
+  id             String    @id @default(uuid())
+  userId         String
+  type           TxType
+  description    String
+  categoryId     String?
+  walletId       String?
+  amount         Decimal   @db.Decimal(19, 4)
+  frequency      Frequency
+  intervalDays   Int? // frequência CUSTOM: a cada N dias
+  dayOfMonth     Int? // dia de referência (mensal e múltiplos); meses sem o dia usam o último dia
+  startDate      DateTime  @db.Date
+  endDate        DateTime? @db.Date
+  maxOccurrences Int?
+  isSubscription Boolean   @default(false)
+  active         Boolean   @default(true)
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active])
+  @@map("recurring_rules")
+}
+
+model Split {
+  id            String    @id @default(uuid())
+  userId        String
+  description   String
+  totalAmount   Decimal   @db.Decimal(19, 4)
+  myShare       Decimal   @db.Decimal(19, 4)
+  date          DateTime  @db.Date
+  walletId      String
+  transactionId String? // minha despesa (só a minha parte, RN)
+  canceledAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  participants SplitParticipant[]
+
+  @@index([userId, date])
+  @@map("splits")
+}
+
+model SplitParticipant {
+  id            String    @id @default(uuid())
+  splitId       String
+  name          String
+  amount        Decimal   @db.Decimal(19, 4)
+  paidAt        DateTime? @db.Date
+  ledgerEntryId String?
+
+  split Split @relation(fields: [splitId], references: [id], onDelete: Cascade)
+
+  @@map("split_participants")
+}
+
+// ── E7: financiamentos, empréstimos e consórcios ────────────────────────────────
+enum DebtKind {
+  REAL_ESTATE
+  VEHICLE
+  PERSONAL
+  PAYROLL
+  STUDENT
+  PRIVATE
+  OTHER
+}
+
+enum AmortSystem {
+  PRICE
+  SAC
+}
+
+enum ScheduleSource {
+  CALCULATED
+  IMPORTED
+  MANUAL
+}
+
+enum DebtStatus {
+  ACTIVE
+  PAID_OFF
+  CANCELED
+}
+
+enum InstallmentStatus {
+  PENDING
+  PAID
+  CANCELED_PAYOFF // cancelada por quitação, histórico preservado (RN048)
+}
+
+model Financing {
+  id                String         @id @default(uuid())
+  userId            String
+  name              String
+  creditor          String?
+  kind              DebtKind
+  contractedAmount  Decimal        @db.Decimal(19, 4)
+  downPayment       Decimal        @default(0) @db.Decimal(19, 4)
+  financedAmount    Decimal        @db.Decimal(19, 4)
+  monthlyRate       Decimal        @db.Decimal(9, 6) // 0.0149 = 1,49% a.m.
+  annualCet         Decimal?       @db.Decimal(9, 4)
+  system            AmortSystem
+  installments      Int
+  feePerInstallment Decimal        @default(0) @db.Decimal(19, 4) // seguros/tarifas por parcela (RN047)
+  contractDate      DateTime       @db.Date
+  firstDueDate      DateTime       @db.Date
+  dueDay            Int
+  walletId          String?
+  scheduleSource    ScheduleSource @default(CALCULATED)
+  officialBalance   Decimal?       @db.Decimal(19, 4) // saldo informado pelo credor (RN044/049)
+  officialBalanceAt DateTime?      @db.Date
+  status            DebtStatus     @default(ACTIVE)
+  paidOffDate       DateTime?      @db.Date
+  notes             String?
+  createdAt         DateTime       @default(now())
+
+  user  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items FinancingInstallment[]
+  extra FinancingExtraPayment[]
+
+  @@index([userId, status])
+  @@map("financings")
+}
+
+model FinancingInstallment {
+  id            String            @id @default(uuid())
+  userId        String
+  financingId   String
+  number        Int
+  dueDate       DateTime          @db.Date
+  principal     Decimal           @db.Decimal(19, 4)
+  interest      Decimal           @db.Decimal(19, 4)
+  fees          Decimal           @default(0) @db.Decimal(19, 4)
+  total         Decimal           @db.Decimal(19, 4)
+  status        InstallmentStatus @default(PENDING)
+  paidAmount    Decimal           @default(0) @db.Decimal(19, 4)
+  lateFee       Decimal           @default(0) @db.Decimal(19, 4) // multa/juros de atraso pagos (separados, RN047)
+  paidDate      DateTime?         @db.Date
+  transactionId String?
+
+  financing Financing @relation(fields: [financingId], references: [id], onDelete: Cascade)
+
+  @@unique([financingId, number])
+  @@index([userId, dueDate])
+  @@map("financing_installments")
+}
+
+model FinancingExtraPayment {
+  id            String   @id @default(uuid())
+  userId        String
+  financingId   String
+  amount        Decimal  @db.Decimal(19, 4)
+  mode          String // REDUCE_TERM | REDUCE_INSTALLMENT | PAYOFF
+  date          DateTime @db.Date
+  transactionId String?
+  createdAt     DateTime @default(now())
+
+  financing Financing @relation(fields: [financingId], references: [id], onDelete: Cascade)
+
+  @@map("financing_extra_payments")
+}
+
+enum ConsortiumKind {
+  REAL_ESTATE
+  VEHICLE
+  SERVICE
+  OTHER
+}
+
+enum ConsortiumStatus {
+  ACTIVE
+  CONTEMPLATED
+  CANCELED
+  CLOSED
+}
+
+model Consortium {
+  id                String           @id @default(uuid())
+  userId            String
+  name              String
+  administrator     String?
+  groupNumber       String?
+  quota             String?
+  kind              ConsortiumKind
+  initialLetter     Decimal          @db.Decimal(19, 4)
+  currentLetter     Decimal          @db.Decimal(19, 4)
+  installments      Int
+  installmentAmount Decimal          @db.Decimal(19, 4)
+  contractDate      DateTime         @db.Date
+  firstDueDate      DateTime         @db.Date
+  dueDay            Int
+  adminFeeRate      Decimal          @default(0) @db.Decimal(9, 4)
+  reserveFundRate   Decimal          @default(0) @db.Decimal(9, 4)
+  insuranceFee      Decimal          @default(0) @db.Decimal(19, 4)
+  adjustmentRule    String? // ex.: INCC, IPCA, tabela da administradora
+  nextAssemblyDate  DateTime?        @db.Date
+  walletId          String?
+  status            ConsortiumStatus @default(ACTIVE)
+  notes             String?
+  createdAt         DateTime         @default(now())
+
+  user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       ConsortiumInstallment[]
+  adjustments ConsortiumAdjustment[]
+  events      ConsortiumEvent[]
+
+  @@index([userId, status])
+  @@map("consortiums")
+}
+
+model ConsortiumInstallment {
+  id            String            @id @default(uuid())
+  userId        String
+  consortiumId  String
+  number        Int
+  dueDate       DateTime          @db.Date
+  amount        Decimal           @db.Decimal(19, 4)
+  status        InstallmentStatus @default(PENDING)
+  paidAmount    Decimal           @default(0) @db.Decimal(19, 4)
+  lateFee       Decimal           @default(0) @db.Decimal(19, 4)
+  paidDate      DateTime?         @db.Date
+  transactionId String?
+
+  consortium Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+
+  @@unique([consortiumId, number])
+  @@index([userId, dueDate])
+  @@map("consortium_installments")
+}
+
+// Reajustes da carta ou da parcela, com vigência e origem da informação (RN052).
+model ConsortiumAdjustment {
+  id            String   @id @default(uuid())
+  userId        String
+  consortiumId  String
+  target        String // LETTER | INSTALLMENT
+  mode          String // AMOUNT | PERCENT
+  value         Decimal  @db.Decimal(19, 4)
+  previous      Decimal  @db.Decimal(19, 4)
+  next          Decimal  @db.Decimal(19, 4)
+  effectiveDate DateTime @db.Date
+  source        String // USER | ADMINISTRATOR
+  note          String?
+  createdAt     DateTime @default(now())
+
+  consortium Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+
+  @@map("consortium_adjustments")
+}
+
+// Lance, contemplação, liberação e uso da carta: eventos específicos (RN055/056). Nada presume dinheiro livre (RN058).
+model ConsortiumEvent {
+  id           String   @id @default(uuid())
+  userId       String
+  consortiumId String
+  kind         String // BID | CONTEMPLATION | RELEASE | USE
+  date         DateTime @db.Date
+  modality     String? // sorteio | lance | ...
+  amount       Decimal? @db.Decimal(19, 4)
+  description  String?
+  createdAt    DateTime @default(now())
+
+  consortium Consortium @relation(fields: [consortiumId], references: [id], onDelete: Cascade)
+
+  @@map("consortium_events")
+}
+
+// ───────────── E8 · Investimentos ─────────────
+// Conta separada da pessoal. Posição, custo médio e resultado vêm da repetição das operações (nada é gravado derivado).
+
+model Brokerage {
+  id         String    @id @default(uuid())
+  userId     String
+  name       String
+  note       String?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@map("brokerages")
+}
+
+model Investment {
+  id         String    @id @default(uuid())
+  userId     String
+  ticker     String
+  name       String
+  assetClass String // FIXED_INCOME | STOCK | FII | ETF | BDR | CRYPTO | PHYSICAL | CUSTOM
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, ticker])
+  @@index([userId])
+  @@map("investments")
+}
+
+model InvestmentOperation {
+  id           String    @id @default(uuid())
+  userId       String
+  kind         String // CONTRIBUTION | BUY | SELL | DIVIDEND | FEE
+  brokerageId  String
+  investmentId String?
+  date         DateTime  @db.Date
+  quantity     Decimal?  @db.Decimal(24, 8)
+  unitPrice    Decimal?  @db.Decimal(19, 6)
+  amount       Decimal   @db.Decimal(19, 4) // valor bruto em módulo
+  fees         Decimal   @default(0) @db.Decimal(19, 4)
+  dividendKind String? // DIVIDENDO | JCP | RENDIMENTO | CUPOM
+  walletId     String? // carteira pessoal de origem do aporte
+  note         String?
+  canceledAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, date])
+  @@index([userId, investmentId])
+  @@map("investment_operations")
+}
+
+model InvestmentQuote {
+  id           String   @id @default(uuid())
+  userId       String
+  investmentId String
+  date         DateTime @db.Date
+  price        Decimal  @db.Decimal(19, 6)
+  source       String   @default("MANUAL")
+  createdAt    DateTime @default(now())
+
+  @@unique([investmentId, date])
+  @@index([userId])
+  @@map("investment_quotes")
+}
+
+model AllocationTarget {
+  userId     String
+  assetClass String
+  percent    Decimal @db.Decimal(7, 4)
+
+  @@id([userId, assetClass])
+  @@map("allocation_targets")
+}
+
+model InvestorProfile {
+  userId    String   @id
+  answers   Json
+  score     Int
+  profile   String // CONSERVATIVE | MODERATE | BOLD
+  updatedAt DateTime @updatedAt
+
+  @@map("investor_profiles")
+}
+
+model PriceAlert {
+  id           String    @id @default(uuid())
+  userId       String
+  investmentId String
+  direction    String // ABOVE | BELOW
+  price        Decimal   @db.Decimal(19, 6)
+  triggeredAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
+  @@map("price_alerts")
+}
+
+// ───────────── E9 · Planejamento ─────────────
+
+model Budget {
+  id         String   @id @default(uuid())
+  userId     String
+  categoryId String
+  amount     Decimal  @db.Decimal(19, 4) // limite mensal
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, categoryId])
+  @@map("budgets")
+}
+
+model Goal {
+  id           String    @id @default(uuid())
+  userId       String
+  name         String
+  kind         String // SAVING | FREEDOM (renda passiva mensal desejada)
+  targetAmount Decimal   @db.Decimal(19, 4)
+  targetDate   DateTime? @db.Date
+  status       String    @default("ACTIVE") // ACTIVE | REACHED | CANCELED
+  color        String?
+  reachedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, status])
+  @@map("goals")
+}
+
+// Reserva simbólica dentro das carteiras: não move dinheiro nem aparece como despesa (sem dupla contagem, RN079/080).
+model GoalContribution {
+  id         String    @id @default(uuid())
+  userId     String
+  goalId     String
+  amount     Decimal   @db.Decimal(19, 4)
+  date       DateTime  @db.Date
+  note       String?
+  canceledAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([goalId])
+  @@map("goal_contributions")
+}
+
+model AutoInvestRule {
+  id           String   @id @default(uuid())
+  userId       String
+  walletId     String
+  brokerageId  String
+  investmentId String?
+  amount       Decimal  @db.Decimal(19, 4)
+  dayOfMonth   Int
+  active       Boolean  @default(true)
+  lastRunMonth String? // AAAA-MM da última confirmação
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@map("auto_invest_rules")
+}

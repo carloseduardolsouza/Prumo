@@ -1,0 +1,48 @@
+# Infraestrutura local: Postgres + Redis + Mailpit (e-mail de desenvolvimento).
+# Lê as credenciais do .env da raiz. Core e message rodam no host com `npm run dev`
+# (os Dockerfiles em docker/ ficam para o deploy, entrega E10).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:?preencha DB_USER no .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?preencha DB_PASSWORD no .env}
+      POSTGRES_DB: ${DB_NAME:-prumo}
+      TZ: America/Sao_Paulo
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass $$REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # interface web
+
+volumes:
+  postgres_data:
+  redis_data:

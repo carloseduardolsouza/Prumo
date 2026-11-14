@@ -1,0 +1,69 @@
+{
+  "name": "prumo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend do Prumo: core (API financeira) e message (notificações)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n core,message -c blue,magenta \"npm:dev:core\" \"npm:dev:message\"",
+    "dev:core": "tsx watch src/modules/core/server.ts",
+    "dev:message": "tsx watch src/modules/message/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start:core": "node dist/modules/core/server.js",
+    "start:message": "node dist/modules/message/server.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed",
+    "bootstrap": "tsx scripts/bootstrap.ts",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "smoke:e0": "tsx scripts/smoke/e0-fundacao.ts",
+    "smoke:e1": "tsx scripts/smoke/e1-auth.ts",
+    "smoke:e2": "tsx --env-file=.env scripts/smoke/e2-message.ts",
+    "smoke:e3": "tsx scripts/smoke/e3-finance.ts",
+    "smoke:e4": "tsx scripts/smoke/e4-dashboard.ts",
+    "smoke:e5": "tsx scripts/smoke/e5-cards.ts",
+    "smoke:e6": "tsx --env-file=.env scripts/smoke/e6-planning.ts",
+    "smoke:e7": "tsx scripts/smoke/e7-debts.ts",
+    "smoke:e8": "tsx scripts/smoke/e8-invest.ts",
+    "smoke:e9": "tsx scripts/smoke/e9-planning.ts"
+  },
+  "prisma": {
+    "schema": "src/prisma/schema.prisma",
+    "seed": "tsx src/prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "argon2": "^0.45.2",
+    "bullmq": "^6.7.6",
+    "cors": "^2.8.6",
+    "decimal.js": "^10.6.0",
+    "expo-server-sdk": "^8.0.0",
+    "express": "^4.22.3",
+    "express-rate-limit": "^8.7.4",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.5.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.6.6",
+    "@types/nodemailer": "^8.0.2",
+    "concurrently": "^10.0.7",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,27 @@
+meta {
+  name: Criar despesa efetivada
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrlCore}}/api/v1/transactions
+  body: json
+  auth: bearer
+}
+
+headers {
+  Idempotency-Key: {{$guid}}
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  { "type": "EXPENSE", "description": "Supermercado", "amount": "100.50", "walletId": "{{walletId}}", "settled": true }
+}
+
+assert {
+  res.status: eq 201
+}

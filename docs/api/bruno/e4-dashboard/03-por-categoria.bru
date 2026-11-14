@@ -1,0 +1,19 @@
+meta {
+  name: Despesas por categoria
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrlCore}}/api/v1/reports/by-category?type=EXPENSE&from=2026-11-01&to=2026-11-30
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+assert {
+  res.status: eq 200
+}

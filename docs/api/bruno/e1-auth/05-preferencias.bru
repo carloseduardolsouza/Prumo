@@ -1,0 +1,23 @@
+meta {
+  name: Atualizar preferências
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrlCore}}/api/v1/me/preferences
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  { "theme": "claro", "dateFormat": "dd/mm/aaaa", "firstDayOfWeek": 1 }
+}
+
+assert {
+  res.status: eq 200
+}

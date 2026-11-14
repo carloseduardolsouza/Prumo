@@ -1,0 +1,19 @@
+meta {
+  name: Dashboard (mês)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrlCore}}/api/v1/dashboard?period=month
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+assert {
+  res.status: eq 200
+}
